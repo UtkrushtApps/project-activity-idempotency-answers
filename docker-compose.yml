@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16
+    user: postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ./init_database.sql:/docker-entrypoint-initdb.d/init_database.sql:ro
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        DATA_DIR=/var/lib/postgresql/data
+        if [ ! -s "$DATA_DIR/PG_VERSION" ]; then
+          echo 'taskpass' > /tmp/pwfile
+          initdb -D "$DATA_DIR" -U taskuser --pwfile=/tmp/pwfile --auth-host=scram-sha-256 --auth-local=trust
+          pg_ctl -D "$DATA_DIR" -o "-c listen_addresses='localhost'" -w start
+          createdb -U taskuser taskdb
+          psql -U taskuser -d taskdb -f /docker-entrypoint-initdb.d/init_database.sql
+          pg_ctl -D "$DATA_DIR" -m fast -w stop
+        fi
+        exec postgres -D "$DATA_DIR" -c listen_addresses='*'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskuser -d taskdb"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers
